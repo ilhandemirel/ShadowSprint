@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Shadow Sprint</title>
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; background:black; }
+    canvas {
+      display:block;
+      width:100vw; height:100vh;
+      background: linear-gradient(to bottom, #1a001f, #0c0010);
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <script>
+    // ==== Temel Oyun Elemanları ====
+    const canvas = document.getElementById("game");
+    const ctx    = canvas.getContext("2d");
+
+    // ==== Oyun Sabitleri ====
+    const yerCekimi      = 1000;    // Yerçekimi ivmesi (px/s²)
+    const ziplamaHizi    = -400;    // Zıplama hızı (px/s)
+    const maxZiplama     = 3;       // Maksimum zıplama sayısı
+    const kameraHizi     = 240;     // Kamera hareket hızı (px/s)
+    const asansorHizi    = 400;     // Asansör hızı (px/s)
+    const maxDusmeHizi   = 500;     // Maksimum düşme hızı (px/s)
+    const fizikDt        = 1/60;    // Fizik hesaplama sıklığı (60Hz)
+    const coinOlasiligi  = 0.6;     // Coin çıkma olasılığı (%60)
+    const oyuncuYaricap  = 14;      // Oyuncu yarıçapı
+
+    // ==== Menü Butonları ====
+    const butonlar = {
+      basla:   { text:"OYUNA BAŞLA", x:0, y:0, w:260, h:50 },
+      tekrar:  { text:"TEKRAR DENE", x:0, y:0, w:260, h:50 },
+      nasil:   { text:"NASIL OYNANIR", x:0, y:0, w:260, h:50 }
+    };
+
+    // ==== Buton Konumlandırma ====
+    function centerButton(b, offY=0) {
+      b.x = canvas.width/2 - b.w/2;
+      b.y = canvas.height/2 + offY;
+    }
+
+    // ==== Zıplama Yüksekliği Hesaplama ====
+    // Fizik formülü: h = v²/(2g)
+    function calcSingleJumpH(){
+      return (ziplamaHizi**2)/(2*yerCekimi);
+    }
+    const tekZiplamaH = calcSingleJumpH();
+
+    // ==== Platform Şablonu ====
+    // Her platform bloğunun x ve y offset değerleri
+    const staticTpl = [
+      { dx:   0, dy:      0 },
+      { dx: 300, dy: - tekZiplamaH },
+      { dx: 600, dy:   tekZiplamaH/2 },
+      { dx: 900, dy: - tekZiplamaH/1.5 },
+      { dx:1200, dy:   tekZiplamaH/3 }
+    ];
+
+    // ==== Oyun Düzeni Sabitleri ====
+    const platformGenislik = 180;        // Platform genişliği
+    const asansorBosluk    = 20;         // Asansörler arası boşluk
+    const blokGenislik     = staticTpl[staticTpl.length - 1].dx + platformGenislik;  // Platform bloğu genişliği
+    const yukariAsansorX   = blokGenislik + asansorBosluk;                    // Yukarı asansör x pozisyonu
+    const asagiAsansorX    = yukariAsansorX + blokGenislik + asansorBosluk;         // Aşağı asansör x pozisyonu
+    const segmentUzunluk   = asagiAsansorX + asansorBosluk;                    // Toplam segment uzunluğu
+    const tekrarSayisi     = 10;         // Tekrarlanan segment sayısı
+
+    // ==== Oyun Durumu ====
+    let durum       = "menu";       // Oyun durumu (menu, nasil, oyun, kazan, kaybet)
+    let sonKare     = performance.now();
+    let birikZaman  = 0;            // Fizik hesaplamaları için biriken zaman
+    let kameraX     = 0;            // Kamera x pozisyonu
+    let coinSayisi  = 0;            // Toplanan coin sayısı
+    let coinZaman   = 0;            // Coin animasyonu için zaman değişkeni
+
+    // ==== Oyun Nesneleri ====
+    const oyuncu = { 
+      x: 120, 
+      y: 100, 
+      vy: 0, 
+      r: oyuncuYaricap, 
+      ziplama: 0, 
+      asansorde: null 
+    };
+    let platformlar = [];  // Platformlar dizisi
+    let coinler     = [];  // Coinler dizisi
+    const yagmur    = [];  // Yağmur parçacıkları
+    let sessiz      = false;
+
+    // ==== Ses Efektleri ====
+    const sesler = {
+      bg:   new Audio("assets/Background.mp3"),
+      jump: new Audio("assets/Jump.mp3"),
+      coin: new Audio("assets/Coin.mp3"),
+      win:  new Audio("assets/Win.mp3")
+    };
+    sesler.bg.loop   = true;
+    sesler.bg.volume = 0.5;
+
+    // ==== Yağmur Parçacıkları Oluşturma ====
+    for (let i = 0; i < 100; i++) {
+      yagmur.push({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        l: 8 + Math.random() * 10,  // Parçacık uzunluğu
+        s: 200 + Math.random() * 200 // Parçacık hızı
+      });
+    }
+
+    // ==== Oyunu Başlatma ====
+    function startGame(){
+      durum        = "oyun";
+      kameraX      = 0;
+      coinSayisi   = 0;
+      birikZaman   = 0;
+      coinZaman    = 0;
+      sonKare      = performance.now();
+      platformlar  = [];
+      coinler      = [];
+      oyuncu.y     = canvas.height - 100 - tekZiplamaH;
+      oyuncu.vy    = 0;
+      oyuncu.ziplama = 0;
+      oyuncu.asansorde = null;
+      if (!sessiz) sesler.bg.play();
+
+      // Platform yükseklikleri
+      const baseA = canvas.height - 100;
+      const baseB = baseA - 300;
+      const bases = [ baseA, baseB ];
+
+      // Platformları oluştur
+      for (let i = 0; i < tekrarSayisi; i++) {
+        const offX  = i * segmentUzunluk;
+        const baseY = bases[i % 2];
+        const nextY = bases[(i + 1) % 2];
+
+        // Statik platformlar
+        staticTpl.forEach(p => {
+          const x = offX + p.dx, y = baseY + p.dy;
+          platformlar.push({ x,y,w:platformGenislik, h:20, type:"static" });
+          if (Math.random() < coinOlasiligi) {
+            coinler.push({ x:x+platformGenislik/2, y:y-30, r:10, toplandi:false });
+          }
+        });
+
+        // Asansör parametreleri
+        const nextYs   = staticTpl.map(p => nextY + p.dy);
+        const targetY  = Math.min(...nextYs);
+        const rangeDyn = Math.abs(targetY - baseY);
+        const dirUp    = (targetY < baseY) ? -1 : 1;
+
+        // Yukarı asansör
+        const eUp = {
+          x: offX + yukariAsansorX,
+          y: baseY,
+          w: platformGenislik,
+          h: 20,
+          type: "verticalElevator",
+          range: rangeDyn,
+          offset: 0,
+          speed: 0,
+          dir: dirUp
+        };
+        platformlar.push(eUp);
+
+        // Sonraki statik platformlar
+        staticTpl.forEach(p => {
+          const x = offX + yukariAsansorX + p.dx, y = nextY + p.dy;
+          platformlar.push({ x,y,w:platformGenislik, h:20, type:"static" });
+          if (Math.random() < coinOlasiligi) {
+            coinler.push({ x:x+platformGenislik/2, y:y-30, r:10, toplandi:false });
+          }
+        });
+
+        // Aşağı asansör
+        const eDown = {
+          x: offX + asagiAsansorX,
+          y: nextY,
+          w: platformGenislik,
+          h: 20,
+          type: "verticalElevator",
+          range: rangeDyn,
+          offset: 0,
+          speed: 0,
+          dir: -dirUp
+        };
+        platformlar.push(eDown);
+      }
+    }
+
+    // ==== Oyunu Yeniden Başlatma ====
+    function restartGame(){
+      durum = "menu";
+      sesler.bg.pause();
+    }
+
+    // ==== Fizik Güncellemesi ====
+    function updatePhysics(){
+      // Asansörleri başlat
+      platformlar.forEach(p => {
+        if (p.type === "verticalElevator" && p.speed === 0) {
+          const screenX      = p.x - kameraX + oyuncu.x;
+          const screenRight  = screenX + p.w;
+          if (screenRight >= oyuncu.x - oyuncu.r &&
+              screenX     <= oyuncu.x + oyuncu.r) {
+            p.speed = asansorHizi;
+          }
+        }
+      });
+
+      // Kamera hareketi
+      kameraX += kameraHizi * fizikDt;
+
+      // Asansör hareketi ve çarpışma kontrolü
+      platformlar.forEach(p => {
+        if (p.type === "verticalElevator" && p.speed > 0) {
+          const oldOffset = p.offset;
+          const moveAmount = p.speed * fizikDt * p.dir;
+          
+          // Hareketi küçük adımlara böl
+          const stepCount = 4;
+          const stepSize = moveAmount / stepCount;
+          
+          for (let i = 0; i < stepCount; i++) {
+            p.offset += stepSize;
+            
+            // Her adımda çarpışma kontrolü
+            const sy = p.y + p.offset;
+            const sx = p.x - kameraX + oyuncu.x;
+            
+            if (oyuncu.y + oyuncu.r >= sy && 
+                oyuncu.y + oyuncu.r <= sy + 20 &&
+                oyuncu.x + oyuncu.r >= sx && 
+                oyuncu.x - oyuncu.r <= sx + p.w) {
+              oyuncu.y = sy - oyuncu.r;
+              oyuncu.vy = 0;
+              oyuncu.ziplama = 0;
+              oyuncu.asansorde = p;
+            }
+          }
+          
+          if (p.offset <= -p.range) {
+            p.offset = -p.range; p.dir = 0; p.speed = 0;
+          } else if (p.offset >= p.range) {
+            p.offset = p.range; p.dir = 0; p.speed = 0;
+          }
+        }
+      });
+
+      // Yerçekimi
+      oyuncu.vy = Math.min(oyuncu.vy + yerCekimi * fizikDt, maxDusmeHizi);
+
+      // Dikey çarpışma kontrolü
+      const oldY   = oyuncu.y;
+      const newY   = oyuncu.y + oyuncu.vy * fizikDt;
+      const oldBot = oldY + oyuncu.r;
+      const newBot = newY + oyuncu.r;
+      let collided = false, collY = newY, hitElev = null;
+
+      for (const p of platformlar) {
+        const sy = p.y + (p.type==="verticalElevator"? p.offset : 0);
+        if (!(oldBot <= sy && newBot >= sy)) continue;
+        const t = (sy - oldBot) / (newBot - oldBot);
+        if (t<0||t>1) continue;
+        const sx = p.x - kameraX + oyuncu.x;
+        if (oyuncu.x+oyuncu.r < sx || oyuncu.x-oyuncu.r > sx+p.w) continue;
+        collided = true; collY = sy - oyuncu.r;
+        if (p.type==="verticalElevator") hitElev = p;
+        break;
+      }
+
+      if (collided){
+        oyuncu.y     = collY;
+        oyuncu.vy    = 0;
+        oyuncu.ziplama = 0;
+        oyuncu.asansorde = hitElev;
+      } else {
+        oyuncu.y = newY;
+        oyuncu.asansorde = null;
+      }
+
+      // Asansör üzerinde hareket
+      if (oyuncu.asansorde){
+        oyuncu.y += oyuncu.asansorde.speed * fizikDt * oyuncu.asansorde.dir;
+      }
+
+      // Düşme kontrolü
+      if (oyuncu.y - oyuncu.r > canvas.height){
+        durum="kaybet";
+      }
+
+      // Coin toplama
+      coinler.forEach(c=>{
+        if (c.toplandi) return;
+        const dx = (c.x - kameraX + oyuncu.x) - oyuncu.x;
+        const dy = c.y - oyuncu.y;
+        if (Math.hypot(dx,dy) < oyuncu.r + c.r){
+          c.toplandi = true;
+          coinSayisi++;
+          if (!sessiz){
+            sesler.coin.currentTime = 0;
+            sesler.coin.play();
+          }
+          if (coinSayisi >= 10){
+            durum="kazan";
+            if (!sessiz) sesler.win.play();
+          }
+        }
+      });
+    }
+
+    // ==== Ana Güncelleme Döngüsü ====
+    function update(){
+      const now = performance.now();
+      let delta = (now - sonKare)/1000;
+      sonKare = now;
+      birikZaman += delta;
+      coinZaman += delta;  // Coin animasyonu için zamanı güncelle
+      if (birikZaman > 0.2) birikZaman = 0.2;
+      while (birikZaman >= fizikDt){
+        if (durum==="oyun") updatePhysics();
+        birikZaman -= fizikDt;
+      }
+    }
+
+    // ==== Çizim Fonksiyonu ====
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+
+      // Arka plan gradyanı
+      const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      gradient.addColorStop(0, '#0a192f');  // Koyu lacivert
+      gradient.addColorStop(1, '#020c1b');  // Neredeyse siyah lacivert
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Yıldızlar
+      ctx.fillStyle = '#ffffff';
+      for (let i = 0; i < 100; i++) {
+        const x = (i * 70 - (kameraX * 0.0001) % 70) % canvas.width;
+        const y = (i * 50) % canvas.height;
+        const size = 1 + Math.random() * 2;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Skyline
+      ctx.fillStyle="#0a192f";  // Koyu lacivert
+      for (let i=0; i<60; i++){
+        const w=40+Math.random()*60, h=80+Math.random()*140;
+        const x=(i*70 - (kameraX*0.00005)%70);  // Daha da yavaş hareket
+        ctx.globalAlpha = 0.5 + Math.random() * 0.2;
+        ctx.fillRect(x, canvas.height-h, w,h);
+      }
+      ctx.globalAlpha = 1;
+
+      // Platformlar
+      ctx.fillStyle="#aaa";
+      platformlar.forEach(p=>{
+        const sx = p.x - kameraX + oyuncu.x;
+        const sy = p.y + (p.type==="verticalElevator"? p.offset : 0);
+        ctx.fillRect(sx, sy, p.w, p.h || 20);
+      });
+
+      // Coinler
+      ctx.fillStyle="#ffd800";
+      coinler.forEach((c, index)=>{
+        if (c.toplandi) return;
+        const cx = c.x - kameraX + oyuncu.x;
+        // Her coin için farklı bir faz değeri kullanarak farklı zamanlarda sallanmasını sağla
+        const phase = index * 0.5;
+        const floatOffset = Math.sin(coinZaman * 2 + phase) * 5;  // 5 piksel yukarı-aşağı hareket
+        ctx.beginPath(); 
+        ctx.arc(cx, c.y + floatOffset, c.r, 0, Math.PI*2); 
+        ctx.fill();
+        
+        // Parlaklık efekti
+        ctx.globalAlpha = 0.5 + Math.sin(coinZaman * 3 + phase) * 0.2;
+        ctx.beginPath();
+        ctx.arc(cx, c.y + floatOffset, c.r * 0.6, 0, Math.PI*2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      });
+
+      // Oyuncu
+      // Ana karakter gölgesi
+      ctx.shadowColor = '#cd7f32';  // Bronz gölge
+      ctx.shadowBlur = 15;
+      ctx.fillStyle = '#8b4513';  // Koyu bronz
+      ctx.beginPath();
+      ctx.arc(oyuncu.x, oyuncu.y, oyuncu.r, 0, Math.PI * 2);
+      ctx.fill();
+
+      // İç daire (parlak kısım)
+      ctx.shadowBlur = 0;
+      const playerGradient = ctx.createRadialGradient(
+        oyuncu.x - oyuncu.r/3, oyuncu.y - oyuncu.r/3, 0,
+        oyuncu.x, oyuncu.y, oyuncu.r
+      );
+      playerGradient.addColorStop(0, '#cd7f32');  // Bronz
+      playerGradient.addColorStop(1, '#8b4513');  // Koyu bronz
+      ctx.fillStyle = playerGradient;
+      ctx.beginPath();
+      ctx.arc(oyuncu.x, oyuncu.y, oyuncu.r * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Parlak kenar
+      ctx.strokeStyle = '#d2691e';  // Bronz kenar
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(oyuncu.x, oyuncu.y, oyuncu.r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // İç parlak nokta
+      ctx.fillStyle = '#deb887';  // Açık bronz parlak nokta
+      ctx.beginPath();
+      ctx.arc(oyuncu.x - oyuncu.r/4, oyuncu.y - oyuncu.r/4, oyuncu.r/4, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Yağmur
+      ctx.strokeStyle="#fff3";
+      yagmur.forEach(r=>{
+        ctx.beginPath(); ctx.moveTo(r.x,r.y); ctx.lineTo(r.x,r.y+r.l); ctx.stroke();
+      });
+
+      // HUD
+      if (durum==="oyun"){
+        ctx.fillStyle="white"; ctx.font="20px sans-serif";
+        ctx.fillText(`🪙 ${coinSayisi}/10`,20,30);
+      }
+
+      // Menü
+      if (durum==="menu"){
+        ctx.fillStyle="rgba(0,0,0,0.8)"; 
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        
+        ctx.shadowColor = '#ff00ff';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle="#fff"; 
+        ctx.textAlign="center";
+        ctx.font="bold 48px sans-serif"; 
+        ctx.fillText("SHADOW SPRINT",canvas.width/2,canvas.height/2-120);
+        
+        ctx.shadowBlur = 0;
+        ctx.font="20px sans-serif"; 
+        ctx.fillText("OYUNA BAŞLA butonuna tıkla",canvas.width/2,canvas.height/2-80);
+        
+        drawButton(butonlar.basla);
+        drawButton(butonlar.nasil);
+      }
+
+      // Nasıl Oynanır Ekranı
+      if (durum==="nasil"){
+        ctx.fillStyle="rgba(0,0,0,0.9)"; 
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        
+        ctx.shadowColor = '#ff00ff';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle="#fff"; 
+        ctx.textAlign="center";
+        ctx.font="bold 36px sans-serif"; 
+        ctx.fillText("NASIL OYNANIR",canvas.width/2,80);
+        
+        ctx.shadowBlur = 0;
+        ctx.font = "16px sans-serif";
+        ctx.textAlign = "left";
+        const controls = [
+          "🎮 OYUN KONTROLLERİ:",
+          "• SPACE / TIKLAMA: Zıplama",
+          "• 3 kez zıplayabilirsin",
+          "• Asansörlere dikkat et!",
+          "",
+          "⚙️ OYUN ÖZELLİKLERİ:",
+          "• F: Tam Ekran",
+          "• M: Ses Aç/Kapat",
+          "• 10 coin topla ve kazan!",
+          "",
+          "💡 İPUÇLARI:",
+          "• Asansörler seni yukarı taşır",
+          "• Düşmekten kaçın!",
+          "• Coinleri toplamayı unutma"
+        ];
+        
+        const startX = canvas.width/2 - 200;
+        const startY = 150;
+        
+        controls.forEach((text, index) => {
+          if (text.startsWith("🎮") || text.startsWith("⚙️") || text.startsWith("💡")) {
+            ctx.fillStyle = "#ff00ff";
+            ctx.font = "bold 16px sans-serif";
+          } else {
+            ctx.fillStyle = "#fff";
+            ctx.font = "16px sans-serif";
+          }
+          ctx.fillText(text, startX, startY + index * 25);
+        });
+        
+        ctx.textAlign = "center";
+        // Başla butonunu aşağı al
+        const startButton = {...butonlar.basla};
+        startButton.y = canvas.height - 100;
+        drawButton(startButton);
+      }
+
+      // Kazanma/Kaybetme
+      if (durum==="kazan"||durum==="kaybet"){
+        ctx.fillStyle="rgba(0,0,0,0.8)"; 
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+        
+        const msg = (durum==="kazan")?"BAŞARDIN!":"KAYBETTİN!";
+        ctx.shadowColor = durum==="kazan" ? '#00ff00' : '#ff0000';
+        ctx.shadowBlur = 20;
+        ctx.fillStyle="#fff"; 
+        ctx.font="bold 48px sans-serif"; 
+        ctx.fillText(msg,canvas.width/2,canvas.height/2-60);
+        
+        drawButton(butonlar.tekrar);
+      }
+    }
+
+    // ==== Giriş İşleme ====
+    function onInput(e){
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      let x,y;
+      if(e.touches&&e.touches.length){
+        x=e.touches[0].clientX-rect.left; y=e.touches[0].clientY-rect.top;
+      } else {
+        x=e.clientX-rect.left; y=e.clientY-rect.top;
+      }
+      if (durum==="menu"){
+        const b = butonlar.basla;
+        if (x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){
+          startGame(); return;
+        }
+        const h = butonlar.nasil;
+        if (x>=h.x&&x<=h.x+h.w&&y>=h.y&&y<=h.y+h.h){
+          durum = "nasil"; return;
+        }
+      }
+      if (durum==="nasil"){
+        // Nasıl Oynanır ekranındaki başla butonunun konumunu kontrol et
+        const startX = canvas.width/2 - butonlar.basla.w/2;
+        const startY = canvas.height - 100;
+        if (x >= startX && x <= startX + butonlar.basla.w && 
+            y >= startY && y <= startY + butonlar.basla.h) {
+          startGame(); return;
+        }
+      }
+      if (durum==="kazan"||durum==="kaybet"){
+        const b = butonlar.tekrar;
+        if (x>=b.x&&x<=b.x+b.w&&y>=b.y&&y<=b.y+b.h){
+          restartGame(); return;
+        }
+      }
+      if (durum==="oyun" && oyuncu.ziplama < maxZiplama){
+        oyuncu.vy = ziplamaHizi;
+        oyuncu.ziplama++;
+        if (!sessiz){
+          sesler.jump.currentTime = 0;
+          sesler.jump.play();
+        }
+      }
+    }
+
+    // ==== Buton Çizimi ====
+    function drawButton(b){
+      ctx.shadowColor = '#000';
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 5;
+      
+      const buttonGradient = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
+      buttonGradient.addColorStop(0, '#4a0066');
+      buttonGradient.addColorStop(1, '#2a0033');
+      ctx.fillStyle = buttonGradient;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      
+      ctx.strokeStyle = '#ff00ff';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 20px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(b.text, b.x + b.w/2, b.y + b.h/2);
+    }
+
+    // ==== Oyunu Başlat ====
+    function initGame() {
+      durum = "menu";
+      resizeCanvas();
+      if (!sessiz) sesler.bg.play();
+    }
+
+    // ==== Olay Dinleyicileri ====
+    canvas.addEventListener("pointerdown", onInput);
+    canvas.addEventListener("touchstart", onInput);
+    window.addEventListener("keydown", e=>{
+      if (e.code==="Space" && durum==="oyun" && oyuncu.ziplama<maxZiplama){
+        oyuncu.vy = ziplamaHizi;
+        oyuncu.ziplama++;
+        if (!sessiz){
+          sesler.jump.currentTime=0;
+          sesler.jump.play();
+        }
+      }
+      if (e.code==="KeyF"){
+        document.fullscreenElement
+          ? document.exitFullscreen()
+          : document.documentElement.requestFullscreen();
+      }
+      if (e.code==="KeyM"){
+        sessiz = !sessiz;
+        Object.values(sesler).forEach(s=>s.muted = sessiz);
+      }
+    });
+
+    // ==== Canvas Boyutlandırma ====
+    function resizeCanvas() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+      centerButton(butonlar.basla,   90);
+      centerButton(butonlar.nasil,  40);
+      centerButton(butonlar.tekrar, 40);
+    }
+    window.addEventListener("resize", resizeCanvas);
+
+    // ==== Oyunu Başlat ====
+    initGame();
+    (function loop(){
+      update(); draw();
+      requestAnimationFrame(loop);
+    })();
+  </script>
+</body>
+</html>
