@@ -48,3 +48,11 @@
 ## 🧠 Yapay Zeka Kullanımı
 
 Projede oyun mantığının yazımı, zorluk seviyesi planlaması, görsel efektler ve ses kontrolü gibi konularda ChatGPT'den destek alınmıştır. Ayrıntılı promptlar ve cevaplar için [AI.md](AI.md) dosyasını inceleyebilirsiniz.
+
+## 🖼️ Oyun İçi Görseller
+
+### Menü Ekranı
+![Menü](Menu.png)
+
+### Oynanış
+![Oynanış](Oyun.png)
