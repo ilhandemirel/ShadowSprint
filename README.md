@@ -10,7 +10,7 @@
 
 ## 📌 Nasıl Oynanır?
 
-- **SPACE** veya **Tıklama**: Zıplarsın (3 kez zıplayabilirsin)
+- **SPACE** veya **Tıklama**: Zıplarsın (2 kez zıplayabilirsin)
 - **F** tuşu: Tam ekran moduna geç
 - **M** tuşu: Müziği ve sesleri aç/kapat
 - Amaç: 10 coin toplayarak kazanmak  
