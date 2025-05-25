@@ -4,7 +4,7 @@
 🔗 https://ilhandemirel.github.io/ShadowSprint/
 
 🎥 **Oynanış Videosu:**  
-📺 [YouTube'da izle](https://youtube.com/linkiniburayaz)
+📺 [YouTube'da izle](https://youtu.be/C07QVQqW2ZI)
 
 ---
 
